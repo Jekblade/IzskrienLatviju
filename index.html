@@ -65,6 +65,79 @@
     <script src="https://unpkg.com/ngeohash"></script>
     <script>
 
+         class KDTree {
+            constructor(points, depth = 0) {
+                if (points.length === 0) {
+                    this.root = null;
+                    return;
+                }
+                const k = 2;
+                const axis = depth % k;
+                points.sort((a, b) => a[axis] - b[axis]);
+                const median = Math.floor(points.length / 2);
+                this.point = points[median];
+                this.left = new KDTree(points.slice(0, median), depth + 1);
+                this.right = new KDTree(points.slice(median + 1), depth + 1);
+            }
+
+            nearest(point, best = null, bestDist = Infinity) {
+                if (this.root === null) return best;
+                const d = calculateDistance(point, this.point);
+                if (d < bestDist) [best, bestDist] = [this.point, d];
+                const axis = bestDist % 2;
+                const side = point[axis] < this.point[axis] ? 'left' : 'right';
+                best = this[side]?.nearest(point, best, bestDist) || best;
+                return best;
+            }
+        }
+
+        // Helper Functions
+        function calculateDistance([lat1, lng1], [lat2, lng2]) {
+            const R = 6371e3;
+            const phi1 = lat1 * Math.PI / 180;
+            const phi2 = lat2 * Math.PI / 180;
+            const deltaPhi = (lat2 - lat1) * Math.PI / 180;
+            const deltaLambda = (lng2 - lng1) * Math.PI / 180;
+
+            const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+                      Math.cos(phi1) * Math.cos(phi2) *
+                      Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+            return R * c;
+        }
+
+        function resizeAndFitBorder(coords, bounds) {
+            const sw = bounds.getSouthWest();
+            const ne = bounds.getNorthEast();
+            const latRange = Math.max(...coords.map(p => p[0])) - Math.min(...coords.map(p => p[0]));
+            const lngRange = Math.max(...coords.map(p => p[1])) - Math.min(...coords.map(p => p[1]));
+            const areaLatRange = ne.lat - sw.lat;
+            const areaLngRange = ne.lng - sw.lng;
+            const scale = Math.min(areaLatRange / latRange, areaLngRange / lngRange);
+            const latCenter = (Math.max(...coords.map(p => p[0])) + Math.min(...coords.map(p => p[0]))) / 2;
+            const lngCenter = (Math.max(...coords.map(p => p[1])) + Math.min(...coords.map(p => p[1]))) / 2;
+            const areaLatCenter = (sw.lat + ne.lat) / 2;
+            const areaLngCenter = (sw.lng + ne.lng) / 2;
+
+            const transformedCoords = coords.map(([lat, lng]) => [
+                areaLatCenter + (lat - latCenter) * scale,
+                areaLngCenter + (lng - lngCenter) * scale
+            ]);
+
+            L.polyline(transformedCoords, { color: 'gray', weight: 2, dashArray: "5,10", fillOpacity: 0 }).addTo(map);
+            return transformedCoords;
+        }
+
+        // Priority Queue for A* Pathfinding
+        class PriorityQueue {
+            constructor() { this.elements = []; }
+            enqueue(element, priority) { this.elements.push({ element, priority }); this.elements.sort((a, b) => a.priority - b.priority); }
+            dequeue() { return this.elements.shift().element; }
+            isEmpty() { return this.elements.length === 0; }
+        }
+
+
         let map, drawnItems, selectedArea, roadNetwork, latviaBorderCoords;
 
         async function initializeMap() {
@@ -145,8 +218,7 @@
                 return;
             }
 
-            // Add a buffer to the bounds to expand the area
-            const buffer = 0.02;  
+            const buffer = 0.01;
             const query = `[out:json];way["highway"](${selectedArea._southWest.lat - buffer},${selectedArea._southWest.lng - buffer},${selectedArea._northEast.lat + buffer},${selectedArea._northEast.lng + buffer});out geom;`;
 
             try {
@@ -160,56 +232,52 @@
                     return;
                 }
 
+                // Step 1: Resize Latvia Border
                 const resizedLatviaBorder = resizeAndFitBorder(latviaBorderCoords, selectedArea);
+
+                // Step 2: Build road network graph as an array of edges
                 const roadNetwork = buildRoadNetworkGraph(roadSegments);
 
+                // Step 3: Find closest road points for each resized border point
                 const closestPoints = resizedLatviaBorder.map(point => findClosestRoadPoint(point, roadNetwork) || point);
+
+                // Visualize closest points on the map
                 closestPoints.forEach(point => {
                     L.circleMarker(point, { color: 'orange', radius: 4, weight: 2, fillOpacity: 0.8 }).addTo(map);
                 });
 
-                //const optimalRoute = await connectPointsWithAStar(closestPoints, roadNetwork);
+                // Step 4: Build road network graph as a MAP
+                const roadNetworkMap = buildRoadNetworkGraph_map(roadSegments);
+                console.log("Built roadNetwork Map:", roadNetwork[5]);
 
+
+                // Connect points and draw the route
+                const optimalRoute = await aStarPathfinding(closestPoints, roadNetworkMap);
                 
+        
+                console.log("Path found:", path);
+                if (optimalRoute) {
+                    L.polyline(optimalRoute, { color: 'red', weight: 3, opacity: 0.8 }).addTo(map);
+                } else {
+                    alert("Failed to find an optimal route.");
+                }
+
             } catch (error) {
                 console.error("Error:", error);
                 alert("Error calculating the route.");
             }
         }
 
-        function resizeAndFitBorder(coords, bounds) {
-            const sw = bounds.getSouthWest();
-            const ne = bounds.getNorthEast();
-            const latRange = Math.max(...coords.map(p => p[0])) - Math.min(...coords.map(p => p[0]));
-            const lngRange = Math.max(...coords.map(p => p[1])) - Math.min(...coords.map(p => p[1]));
-            const areaLatRange = ne.lat - sw.lat;
-            const areaLngRange = ne.lng - sw.lng;
-            const scale = Math.min(areaLatRange / latRange, areaLngRange / lngRange);
-            const latCenter = (Math.max(...coords.map(p => p[0])) + Math.min(...coords.map(p => p[0]))) / 2;
-            const lngCenter = (Math.max(...coords.map(p => p[1])) + Math.min(...coords.map(p => p[1]))) / 2;
-            const areaLatCenter = (sw.lat + ne.lat) / 2;
-            const areaLngCenter = (sw.lng + ne.lng) / 2;
-
-            const transformedCoords = coords.map(([lat, lng]) => [
-                areaLatCenter + (lat - latCenter) * scale,
-                areaLngCenter + (lng - lngCenter) * scale
-            ]);
-
-            L.polyline(transformedCoords, { color: 'gray', weight: 2, dashArray: "5,10", fillOpacity: 0 }).addTo(map);
-            return transformedCoords;
-        }
-
         function buildRoadNetworkGraph(roadSegments) {
             const graph = [];
             roadSegments.forEach(segment => {
                 const path = segment.geometry.map(point => [point.lat, point.lon]);
-                path.forEach((point, i) => {
-                    if (i > 0) {
-                        const prev = path[i - 1];
-                        graph.push({ from: prev, to: point });
-                        graph.push({ from: point, to: prev });
-                    }
-                });
+                for (let i = 1; i < path.length; i++) {
+                    const prev = path[i - 1];
+                    const curr = path[i];
+                    graph.push({ from: prev, to: curr });
+                    graph.push({ from: curr, to: prev }); // Bidirectional edge
+                }
             });
             return graph;
         }
@@ -218,7 +286,7 @@
             let minDist = Infinity;
             let closestPoint = null;
 
-            roadNetwork.forEach(({ from, to }) => {
+            roadNetwork.forEach(({ from }) => {
                 const dist = calculateDistance(point, from);
                 if (dist < minDist) {
                     minDist = dist;
@@ -228,92 +296,100 @@
             return closestPoint;
         }
 
-        function calculateDistance([lat1, lng1], [lat2, lng2]) {
-            const R = 6371e3;
-            const phi1 = lat1 * Math.PI / 180;
-            const phi2 = lat2 * Math.PI / 180;
-            const deltaPhi = (lat2 - lat1) * Math.PI / 180;
-            const deltaLambda = (lng2 - lng1) * Math.PI / 180;
 
-            const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
-                      Math.cos(phi1) * Math.cos(phi2) *
-                      Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-            return R * c;
+        function buildRoadNetworkGraph_map(roadSegments) {
+    const graph = new Map();  // Initialize as a Map for quick access
+
+    roadSegments.forEach(segment => {
+        const path = segment.geometry.map(point => [point.lat, point.lon]);
+        for (let i = 1; i < path.length; i++) {
+            const prev = path[i - 1];
+            const curr = path[i];
+            const prevKey = `${prev[0]},${prev[1]}`;
+            const currKey = `${curr[0]},${curr[1]}`;
+
+            if (!graph.has(prevKey)) graph.set(prevKey, []);
+            if (!graph.has(currKey)) graph.set(currKey, []);
+
+            graph.get(prevKey).push(curr);  // Add neighbor
+            graph.get(currKey).push(prev);  // Ensure bidirectional connection
+        }
+    });
+    return graph;
+}
+
+        // KD Tree construction from unique points
+        function buildKDTreeFromRoadNetwork(roadNetwork) {
+            const uniquePoints = Array.from(new Set(
+                Array.from(roadNetwork.keys()).map(key => key.split(',').map(Number))
+            ));
+            return new kdTree(uniquePoints, calculateDistance);
         }
 
-       async function connectPointsWithAStar(points, roadNetwork) {
-            let fullPath = [];
+        async function aStarPathfinding(pointsList, roadNetwork) {
+    let fullPath = [];  // Array to hold the full path
 
-            // Adjusting the loop to process only the first two connections
-            for (let i = 0; i < 2; i++) { // Loop for two segments only
-                const start = points[i];
-                const end = points[i + 1];
+    for (let i = 0; i < pointsList.length - 1; i++) {
+        const start = pointsList[i];
+        const goal = pointsList[i + 1];
 
-                const pathSegment = await aStarPathfinding(start, end, roadNetwork);
-                if (pathSegment) {
-                    fullPath = fullPath.concat(pathSegment);
-                    L.polyline(pathSegment, { color: 'red', weight: 4, opacity: 0.6 }).addTo(map);
-                }
-            }
-
-            return fullPath;
+        // Perform A* search between the current pair of points
+        const pathSegment = aStarPathSegment(start, goal, roadNetwork);
+        if (pathSegment) {
+            // Concatenate path segments, avoiding duplication of consecutive points
+            if (fullPath.length > 0) fullPath.pop();  // Remove last point to avoid duplicates
+            fullPath = fullPath.concat(pathSegment);
+        } else {
+            console.warn(`No path found between points ${start} and ${goal}`);
         }
+    }
 
-        // A* pathfinding algorithm (as provided)
-        async function aStarPathfinding(start, goal, graph) {
-            const openSet = [start];
+    return fullPath;
+}
+
+        // Original A* pathfinding function for a single pair of points
+        function aStarPathSegment(start, goal, roadNetwork) {
+            const openSet = new PriorityQueue();
+            openSet.enqueue(start, 0);
             const cameFrom = new Map();
             const gScore = new Map([[JSON.stringify(start), 0]]);
-            const fScore = new Map([[JSON.stringify(start), heuristic(start, goal)]]);
+            const fScore = new Map([[JSON.stringify(start), calculateDistance(start, goal)]]);
 
-            while (openSet.length > 0) {
-                // Sort openSet by fScore and select the node with the lowest fScore
-                openSet.sort((a, b) => fScore.get(JSON.stringify(a)) - fScore.get(JSON.stringify(b)));
-                const current = openSet.shift();
+            while (!openSet.isEmpty()) {
+                const current = openSet.dequeue();
 
-                // If goal is reached, reconstruct the path
+                // Check if the goal has been reached
                 if (current[0] === goal[0] && current[1] === goal[1]) {
                     return reconstructPath(cameFrom, current);
                 }
 
-                graph.forEach(edge => {
-                    if (JSON.stringify(edge.from) === JSON.stringify(current)) {
-                        const neighbor = edge.to;
-                        const tentative_gScore = gScore.get(JSON.stringify(current)) + calculateDistance(current, neighbor);
+                // Retrieve neighbors from the Map
+                const currentKey = `${current[0]},${current[1]}`;
+                const neighbors = roadNetwork.get(currentKey);
 
-                        if (tentative_gScore < (gScore.get(JSON.stringify(neighbor)) || Infinity)) {
-                            cameFrom.set(JSON.stringify(neighbor), current);
-                            gScore.set(JSON.stringify(neighbor), tentative_gScore);
-                            fScore.set(JSON.stringify(neighbor), tentative_gScore + heuristic(neighbor, goal));
+                if (!neighbors) {
+                    console.warn(`No neighbors found for ${currentKey}`);
+                    continue;
+                }
 
-                            if (!openSet.some(node => JSON.stringify(node) === JSON.stringify(neighbor))) {
-                                openSet.push(neighbor);
-                            }
+                neighbors.forEach(neighbor => {
+                    const tentativeGScore = (gScore.get(JSON.stringify(current)) || Infinity) + calculateDistance(current, neighbor);
+
+                    if (tentativeGScore < (gScore.get(JSON.stringify(neighbor)) || Infinity)) {
+                        cameFrom.set(JSON.stringify(neighbor), current);
+                        gScore.set(JSON.stringify(neighbor), tentativeGScore);
+                        fScore.set(JSON.stringify(neighbor), tentativeGScore + calculateDistance(neighbor, goal));
+
+                        if (!openSet.elements.some(el => JSON.stringify(el.element) === JSON.stringify(neighbor))) {
+                            openSet.enqueue(neighbor, fScore.get(JSON.stringify(neighbor)));
                         }
                     }
                 });
             }
 
-            return null; // Return null if no path is found
+            return null; // Return null if no path found
         }
-
-        // Helper function to reconstruct the path for A*
-        function reconstructPath(cameFrom, current) {
-            const path = [current];
-            while (cameFrom.has(JSON.stringify(current))) {
-                current = cameFrom.get(JSON.stringify(current));
-                path.unshift(current);
-            }
-            return path;
-        }
-
-        // Heuristic function for A* (using distance as heuristic)
-        function heuristic([lat1, lng1], [lat2, lng2]) {
-            return calculateDistance([lat1, lng1], [lat2, lng2]);
-        }   
-
 
 
         initializeMap();
