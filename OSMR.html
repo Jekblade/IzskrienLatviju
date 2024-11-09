@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Izskrien Latviju!</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body, html { height: 100%; margin: 0; padding: 0; font-family: 'Montserrat', sans-serif; }
+        #map { width: 100%; height: 90vh; }
+        #header { 
+            position: fixed; 
+            top: 10px; 
+            left: 50%; 
+            transform: translateX(-50%); 
+            display: flex; 
+            align-items: center; 
+            z-index: 1001;
+            background: white;
+            padding: 10px;
+            border-radius: 4px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        #search-bar { padding: 8px; font-size: 16px; border-radius: 4px; width: 200px; margin-right: 10px; border: 1px solid #ddd; }
+        #search-btn, #create-btn, #download-btn { 
+            font-size: 16px; 
+            padding: 8px 12px; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            color: white;
+            margin: 0 5px;
+        }
+        #search-btn { background-color: #333; }
+        #create-btn { background-color: #4CAF50; }
+        #download-btn { 
+            background-color: #2196F3; 
+            display: none;
+        }
+        #loading { 
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            z-index: 1002;
+        }
+        .leaflet-routing-container {
+            display: none;
+        }
+        .selected-marker {
+            border: 2px solid #ff0000 !important;
+            z-index: 1000 !important;
+        }
+        .leaflet-edit-move {
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <input id="search-bar" type="text" placeholder="Ievadiet pilsētu...">
+        <button id="search-btn">Meklēt</button>
+        <button id="create-btn">Aiziet!</button>
+        <button id="download-btn">Download GPX</button>
+    </div>
+    <div id="loading">Aprēķina maršrutu...</div>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+
+    <script>
+        let map, drawnItems, selectedArea, latviaBorderCoords, routingControl;
+        let selectedMarker = null;
+        let markers = [];
+        let customRouteLayer = null;
+        let grayBorderLine = null;
+        
+        function calculateDistance([lat1, lng1], [lat2, lng2]) {
+            const R = 6371e3;
+            const phi1 = lat1 * Math.PI / 180;
+            const phi2 = lat2 * Math.PI / 180;
+            const deltaPhi = (lat2 - lat1) * Math.PI / 180;
+            const deltaLambda = (lng2 - lng1) * Math.PI / 180;
+
+            const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+                      Math.cos(phi1) * Math.cos(phi2) *
+                      Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+            return R * c;
+        }
+
+        function resizeAndFitBorder(coords, bounds) {
+            const sw = bounds.getSouthWest();
+            const ne = bounds.getNorthEast();
+            const latRange = Math.max(...coords.map(p => p[0])) - Math.min(...coords.map(p => p[0]));
+            const lngRange = Math.max(...coords.map(p => p[1])) - Math.min(...coords.map(p => p[1]));
+            const areaLatRange = ne.lat - sw.lat;
+            const areaLngRange = ne.lng - sw.lng;
+            const scale = Math.min(areaLatRange / latRange, areaLngRange / lngRange) * 0.9;
+            const latCenter = (Math.max(...coords.map(p => p[0])) + Math.min(...coords.map(p => p[0]))) / 2;
+            const lngCenter = (Math.max(...coords.map(p => p[1])) + Math.min(...coords.map(p => p[1]))) / 2;
+            const areaLatCenter = (sw.lat + ne.lat) / 2;
+            const areaLngCenter = (sw.lng + ne.lng) / 2;
+
+            const transformedCoords = coords.map(([lat, lng]) => [
+                areaLatCenter + (lat - latCenter) * scale,
+                areaLngCenter + (lng - lngCenter) * scale
+            ]);
+
+            grayBorderLine = L.polyline(transformedCoords, { 
+                color: 'gray', 
+                weight: 2, 
+                dashArray: "5,10", 
+                fillOpacity: 0 
+            }).addTo(map);
+            
+            return transformedCoords;
+        }
+
+        function createEditableMarker(latlng) {
+            const marker = L.circleMarker(latlng, { 
+                color: 'orange', 
+                radius: 4, 
+                weight: 2, 
+                fillOpacity: 0.8 
+            });
+
+            marker.on('click', function(e) {
+                if (selectedMarker) {
+                    selectedMarker.setStyle({
+                        color: 'orange',
+                        weight: 2
+                    });
+                }
+                selectedMarker = marker;
+                marker.setStyle({
+                    color: 'red',
+                    weight: 4
+                });
+            });
+
+            marker.on('dragend', updateCustomRoute);
+            return marker;
+        }
+
+        function updateCustomRoute() {
+            if (customRouteLayer) {
+                map.removeLayer(customRouteLayer);
+            }
+
+            const coordinates = markers.map(marker => marker.getLatLng());
+            customRouteLayer = L.polyline(coordinates, {
+                color: 'blue',
+                weight: 4,
+                opacity: 0.6
+            }).addTo(map);
+        }
+
+        function generateGPX() {
+            const coordinates = markers.map(marker => marker.getLatLng());
+            let gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Izskrien Latviju">
+    <trk>
+        <name>Running Route</name>
+        <trkseg>`;
+            
+            coordinates.forEach(coord => {
+                gpx += `
+            <trkpt lat="${coord.lat}" lon="${coord.lng}">
+                <ele>0</ele>
+            </trkpt>`;
+            });
+            
+            gpx += `
+        </trkseg>
+    </trk>
+</gpx>`;
+
+            const blob = new Blob([gpx], { type: 'application/gpx+xml' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'running_route.gpx';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }
+
+        async function initializeMap() {
+            map = L.map('map').setView([56.8796, 24.6032], 7);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 17, minZoom: 5 }).addTo(map);
+
+            try {
+                const response = await fetch('latvia.json');
+                if (!response.ok) throw new Error("Failed to load Latvia border data");
+                latviaBorderCoords = await response.json();
+            } catch (error) {
+                console.error("Error loading latvia.json:", error);
+                latviaBorderCoords = [
+                    [56.9510894, 24.1781503],
+                    [56.9525437, 24.1799233],
+                    [56.9515894, 24.1791503]
+                ];
+            }
+
+            drawnItems = new L.FeatureGroup();
+            map.addLayer(drawnItems);
+            const drawControl = new L.Control.Draw({
+                draw: { polygon: false, rectangle: true, circle: false, marker: false, polyline: false },
+                edit: { featureGroup: drawnItems, remove: true }
+            });
+            map.addControl(drawControl);
+
+            map.on(L.Draw.Event.CREATED, function (event) {
+                drawnItems.clearLayers();
+                const layer = event.layer;
+                layer.setStyle({ fillOpacity: 0, weight: 1 });
+                drawnItems.addLayer(layer);
+                selectedArea = layer.getBounds();
+            });
+
+            drawnItems.on('layerremove', function() {
+                selectedArea = null;
+                if (routingControl) {
+                    map.removeControl(routingControl);
+                    routingControl = null;
+                }
+                if (grayBorderLine) {
+                    map.removeLayer(grayBorderLine);
+                    grayBorderLine = null;
+                }
+                if (customRouteLayer) {
+                    map.removeLayer(customRouteLayer);
+                    customRouteLayer = null;
+                }
+                markers.forEach(marker => map.removeLayer(marker));
+                markers = [];
+                document.getElementById('download-btn').style.display = 'none';
+            });
+
+            map.on('mousemove', function(e) {
+                if (selectedMarker) {
+                    selectedMarker.setLatLng(e.latlng);
+                    updateCustomRoute();
+                }
+            });
+
+            map.on('click', function() {
+                if (selectedMarker) {
+                    selectedMarker = null;
+                    updateCustomRoute();
+                }
+            });
+
+            document.getElementById('search-btn').addEventListener('click', searchPlace);
+            document.getElementById('search-bar').addEventListener('keypress', function (e) {
+                if (e.key === 'Enter') searchPlace();
+            });
+            document.getElementById('create-btn').addEventListener('click', calculateOptimalRoute);
+            document.getElementById('download-btn').addEventListener('click', generateGPX);
+        }
+
+        function searchPlace() {
+            const query = document.getElementById('search-bar').value;
+            if (!query) return;
+
+            fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${query}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data && data[0]) {
+                        const lat = parseFloat(data[0].lat);
+                        const lon = parseFloat(data[0].lon);
+                        map.flyTo([lat, lon], 13);
+                    } else {
+                        alert('Location not found');
+                    }
+                })
+                .catch(error => console.error('Error fetching location:', error));
+        }
+
+        async function calculateOptimalRoute() {
+            if (!selectedArea) {
+                alert("Please select an area on the map.");
+                return;
+            }
+
+            const loading = document.getElementById('loading');
+            loading.style.display = 'block';
+
+            try {
+                if (routingControl) {
+                    map.removeControl(routingControl);
+                }
+                
+                markers.forEach(marker => map.removeLayer(marker));
+                markers = [];
+
+                const resizedBorderPoints = resizeAndFitBorder(latviaBorderCoords, selectedArea);
+                
+                // Create markers and store them
+                markers = resizedBorderPoints.map(point => {
+                    const marker = createEditableMarker(point);
+                    marker.addTo(map);
+                    return marker;
+                });
+
+                // Initial OSRM routing
+                routingControl = L.Routing.control({
+                    waypoints: markers.map(marker => marker.getLatLng()),
+                    router: L.Routing.osrmv1({
+                        serviceUrl: 'https://router.project-osrm.org/route/v1',
+                        profile: 'foot'
+                    }),
+                    lineOptions: {
+                        styles: [{ color: 'blue', opacity: 0.6, weight: 4 }]
+                    },
+                    addWaypoints: false,
+                    draggableWaypoints: false,
+                    fitSelectedRoutes: true
+                }).addTo(map);
+
+                routingControl.on('routesfound', function() {
+                    document.querySelector('.leaflet-routing-container').style.display = 'none';
+                    document.getElementById('download-btn').style.display = 'inline-block';
+                });
+
+            } catch (error) {
+                console.error("Error calculating route:", error);
+                alert("Error calculating the route. Please try again.");
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+
+        initializeMap();
+    </script>
+</body>
+</html>
