@@ -54,6 +54,15 @@
             box-shadow: 0 2px 10px rgba(0,0,0,0.2);
             z-index: 1002;
         }
+        .tutorial-arrow {
+            position: absolute;
+            font-size: 1.5em;
+            font-weight: bold;
+            color: white;
+            text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);
+            z-index: 1003;
+        }
+        #arrow-select { top: 180px; left: 400px; }
         .leaflet-routing-container {
             display: none;
         }
@@ -74,6 +83,7 @@
         <button id="create-btn">Aiziet!</button>
         <button id="download-btn">Download GPX</button>
     </div>
+    <div id="arrow-select" class="tutorial-arrow" style="display: none;"> ← Select area</div>
     <div id="loading">Aprēķina maršrutu...</div>
     <div id="map"></div>
 
@@ -131,31 +141,6 @@
             return transformedCoords;
         }
 
-        function createEditableMarker(latlng) {
-            const marker = L.circleMarker(latlng, { 
-                color: 'orange', 
-                radius: 4, 
-                weight: 2, 
-                fillOpacity: 0.8 
-            });
-
-            marker.on('click', function(e) {
-                if (selectedMarker) {
-                    selectedMarker.setStyle({
-                        color: 'orange',
-                        weight: 2
-                    });
-                }
-                selectedMarker = marker;
-                marker.setStyle({
-                    color: 'red',
-                    weight: 4
-                });
-            });
-
-            marker.on('dragend', updateCustomRoute);
-            return marker;
-        }
 
         function updateCustomRoute() {
             if (customRouteLayer) {
@@ -173,32 +158,43 @@
         function generateGPX() {
             const coordinates = markers.map(marker => marker.getLatLng());
             let gpx = `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="Izskrien Latviju">
-    <trk>
-        <name>Running Route</name>
-        <trkseg>`;
-            
-            coordinates.forEach(coord => {
-                gpx += `
-            <trkpt lat="${coord.lat}" lon="${coord.lng}">
-                <ele>0</ele>
-            </trkpt>`;
-            });
-            
-            gpx += `
-        </trkseg>
-    </trk>
-</gpx>`;
+                    <gpx version="1.1" creator="Izskrien Latviju">
+                        <trk>
+                            <name>Running Route</name>
+                            <trkseg>`;
+                                
+                                coordinates.forEach(coord => {
+                                    gpx += `
+                                <trkpt lat="${coord.lat}" lon="${coord.lng}">
+                                    <ele>0</ele>
+                                </trkpt>`;
+                                });
+                                
+                                gpx += `
+                            </trkseg>
+                        </trk>
+                    </gpx>`;
 
             const blob = new Blob([gpx], { type: 'application/gpx+xml' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'running_route.gpx';
+            a.download = 'izskrienLV.gpx';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
+        }
+
+        function createTutorial() {
+            const arrowSelect = document.getElementById('arrow-select');
+
+            // Show selection arrow after search
+            document.getElementById('search-btn').addEventListener('click', () => {
+                if (arrowSearch.style.display !== 'none') hideElementById('arrow-search');
+                arrowSelect.style.display = 'block';
+            });
+            map.on('draw:created', () => hideElementById('arrow-select'));
         }
 
         async function initializeMap() {
@@ -206,17 +202,15 @@
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 17, minZoom: 5 }).addTo(map);
 
             try {
-                const response = await fetch('latvia.json');
+                const response = await fetch('LV.json');
                 if (!response.ok) throw new Error("Failed to load Latvia border data");
                 latviaBorderCoords = await response.json();
             } catch (error) {
                 console.error("Error loading latvia.json:", error);
-                latviaBorderCoords = [
-                    [56.9510894, 24.1781503],
-                    [56.9525437, 24.1799233],
-                    [56.9515894, 24.1791503]
-                ];
+                latviaBorderCoords = [];
             }
+
+
 
             drawnItems = new L.FeatureGroup();
             map.addLayer(drawnItems);
@@ -229,7 +223,7 @@
             map.on(L.Draw.Event.CREATED, function (event) {
                 drawnItems.clearLayers();
                 const layer = event.layer;
-                layer.setStyle({ fillOpacity: 0, weight: 1 });
+                layer.setStyle({ fillOpacity: 0, weight: 3 });
                 drawnItems.addLayer(layer);
                 selectedArea = layer.getBounds();
             });
@@ -312,12 +306,6 @@
 
                 const resizedBorderPoints = resizeAndFitBorder(latviaBorderCoords, selectedArea);
                 
-                // Create markers and store them
-                markers = resizedBorderPoints.map(point => {
-                    const marker = createEditableMarker(point);
-                    marker.addTo(map);
-                    return marker;
-                });
 
                 // Initial OSRM routing
                 routingControl = L.Routing.control({
@@ -327,10 +315,10 @@
                         profile: 'foot'
                     }),
                     lineOptions: {
-                        styles: [{ color: 'blue', opacity: 0.6, weight: 4 }]
+                        styles: [{ color: '#red', opacity: 0.6, weight: 4 }]
                     },
                     addWaypoints: false,
-                    draggableWaypoints: false,
+                    draggableWaypoints: true,
                     fitSelectedRoutes: true
                 }).addTo(map);
 
@@ -346,6 +334,38 @@
                 loading.style.display = 'none';
             }
         }
+
+        // Add reset button
+        const resetBtn = document.createElement('button');
+                resetBtn.id = 'reset-btn';
+                resetBtn.textContent = 'X';
+                resetBtn.style = 'background-color: red; color: white; font-size: 16px; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer;';
+                resetBtn.addEventListener('click', resetSelection);
+                document.getElementById('header').appendChild(resetBtn);
+
+                function resetSelection() {
+                    drawnItems.clearLayers();
+                    selectedArea = null;
+
+                    if (routingControl) {
+                        map.removeControl(routingControl);
+                        routingControl = null;
+                    }
+
+                    if (grayBorderLine) {
+                        map.removeLayer(grayBorderLine);
+                        grayBorderLine = null;
+                    }
+
+                    if (customRouteLayer) {
+                        map.removeLayer(customRouteLayer);
+                        customRouteLayer = null;
+                    }
+
+                    markers.forEach(marker => map.removeLayer(marker));
+                    markers = [];
+                    document.getElementById('download-btn').style.display = 'none';
+                }
 
         initializeMap();
     </script>
