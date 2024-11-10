@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select Border Points</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <style>
+        #map { height: 90vh; width: 100%; }
+        #downloadBtn { margin: 10px; padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        #downloadBtn:hover { background-color: #45a049; }
+    </style>
+</head>
+<body>
+
+<h2>Select Border Points for JSON Export</h2>
+<button id="downloadBtn" onclick="downloadJSON()">Download Border JSON</button>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+<script>
+    // Initialize map
+    const map = L.map('map').setView([56.8796, 24.6032], 7); // Centered on Latvia
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 17,
+        minZoom: 5
+    }).addTo(map);
+
+    let borderPoints = []; // Array to hold selected points
+
+    // Add point on map click and store it in borderPoints
+    map.on('click', function(e) {
+        const latLng = [e.latlng.lat, e.latlng.lng];
+        borderPoints.push(latLng);
+        
+        // Add marker for the selected point
+        L.marker(latLng).addTo(map).bindPopup(`Point ${borderPoints.length}`).openPopup();
+    });
+
+    // Download the borderPoints as a JSON file
+    function downloadJSON() {
+        if (borderPoints.length === 0) {
+            alert("No points selected!");
+            return;
+        }
+
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(borderPoints));
+        const downloadAnchorNode = document.createElement('a');
+        downloadAnchorNode.setAttribute("href", dataStr);
+        downloadAnchorNode.setAttribute("download", "border.json");
+        document.body.appendChild(downloadAnchorNode); // Required for Firefox
+        downloadAnchorNode.click();
+        downloadAnchorNode.remove();
+    }
+</script>
+
+</body>
+</html>
