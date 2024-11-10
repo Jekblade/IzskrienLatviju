@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Izskrien Latviju!</title>
+    <link rel="stylesheet" href="./stylesheet.css">
+    <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAA60lEQVR4AWJwL/ABtGdnZ1e9vb1Xs7KyrkpLS39VVFRcVVVVXdXU1FzV1tZe1dXVXTU0NFw1NjZeNTU1XTU3N1+1tLRctba2XrW1tV21t7dfdXR0XHV2dl51dXVddXd3X/X09Fz19vZe9fX1XfX39188fPjw4v79+xcPHjy4ePjw4cWjR48uHj9+fPHkyZOLp0+fXjx79uzi+fPnFy9evLh4+fLlxatXry5ev359UV9f/6GhoeGisbHxorGx8aKuru68srLyvKio6Dw3N/csIyPjLC0t7TQpKek0Li7uJDo6+iQyMvI4LCzsMCgo6MDX13ePEu8DAKqRdIm0Y9jxAAAAAElFTkSuQmCC">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="header">
+        <input id="search-bar" type="text" placeholder="Ievadiet pilsētu..." aria-label="Search location">
+        <div class="btn-container-mobile">
+            <button id="search-btn" class="btn" aria-label="Search">Meklēt</button>
+            <button id="create-btn" class="btn" aria-label="Create route">✔️</button>
+            <button id="undo-btn" class="btn" aria-label="Undo last point">↩</button>
+            <button id="reset-btn" class="btn" aria-label="Reset">✘</button>
+            <button id="download-btn" class="btn" aria-label="Download GPX">➜GPX</button>
+        </div>
+    </div>
+    
+    <div id="arrow-select" class="tutorial-arrow" style="display: none;">←</div>
+    <div id="loading">Aprēķina maršrutu...</div>
+    <div id="error-message" class="error"></div>
+    <div id="info-panel"></div>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+    <script src="./script.js"></script>
+</body>
+</html>
