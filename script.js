@@ -291,6 +291,7 @@ function initializeRoutingControl() {
         if (e.routes && e.routes[0] && e.routes[0].coordinates) {
             state.finalRouteCoordinates = e.routes[0].coordinates.map(coord => [coord.lat, coord.lng]);
             state.currentDistance = e.routes[0].summary.totalDistance;
+            updateInfoPanel();
         } else {
             showError("No route found. Please adjust waypoints and try again.");
         }
