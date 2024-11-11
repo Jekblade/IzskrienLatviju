@@ -456,8 +456,8 @@ function updateTutorialArrow() {
     const drawControl = document.querySelector('.leaflet-draw-draw-rectangle');
     if (drawControl && arrow.style.display !== 'none') {
         const rect = drawControl.getBoundingClientRect();
-        arrow.style.top = (rect.top + rect.height/2 - 15) + 'px';
-        arrow.style.left = (rect.left + 45) + 'px';
+        arrow.style.top = (rect.top + rect.height/2 - 20) + 'px';
+        arrow.style.left = (rect.left + 35) + 'px';
     }
 }
 
