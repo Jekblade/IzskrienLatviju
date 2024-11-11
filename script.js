@@ -227,8 +227,6 @@ async function calculateOptimalRoute() {
     try {
         resetRouteData();
         const resizedBorderPoints = resizeAndFitBorder(state.latviaBorderCoords, state.selectedArea);
-
-        // Set the waypoints without adding individual markers
         state.routePoints = resizedBorderPoints.map(point => [point[0], point[1]]);
         initializeRoutingControl();
     } catch (error) {
@@ -239,78 +237,61 @@ async function calculateOptimalRoute() {
     }
 }
 
-
-function initializeRoutingControl() {
-    // Remove existing routing control if it exists
-    if (state.routingControl) {
-        state.map.removeControl(state.routingControl);
+async function initializeRoutingControl() {
+    // Remove existing route layer if it exists
+    if (state.routeLayer) {
+        state.map.removeLayer(state.routeLayer);
     }
 
-    const waypoints = state.routePoints.map(point => L.latLng(point[0], point[1]));
+    const waypoints = state.routePoints.map(point => point.join(',')).join(';');
+    const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${waypoints}?geometries=geojson&access_token=pk.eyJ1IjoiamVrYWJzamFuIiwiYSI6ImNtM2RrMTd4bjAzNDMycnF1Y2huYjI1dWQifQ.r5oltP7NHqf3W-lJlN0n9A`;
 
-    state.routingControl = L.Routing.control({
-        waypoints: waypoints,
-        router: L.Routing.mapbox('pk.eyJ1IjoiamVrYWJzamFuIiwiYSI6ImNtM2RrMTd4bjAzNDMycnF1Y2huYjI1dWQifQ.r5oltP7NHqf3W-lJlN0n9A', {
-            profile: 'mapbox/walking',  // Set the profile to pedestrian
-        }),
+    try {
+        const response = await fetch(url);
+        const data = await response.json();
 
-        lineOptions: {
-            styles: [{ color: 'red', opacity: 0.6, weight: 4 }]
-        },
-        addWaypoints: false,  // Prevent adding new waypoints
-        draggableWaypoints: true  // Make initial waypoints draggable
-    }).addTo(state.map);
+        if (data.routes && data.routes.length > 0) {
+            const routeGeoJSON = {
+                type: 'Feature',
+                geometry: data.routes[0].geometry,
+                properties: {}
+            };
 
-    // Track waypoint edits
-    state.routingControl.on('waypointschanged', function(e) {
-        // Update only the position of dragged waypoints, avoiding duplication
-        const updatedWaypoints = e.waypoints.map(wp => [wp.latLng.lat, wp.latLng.lng]);
-        state.routePoints = updatedWaypoints;  // Update route points to the new positions
-        updateRoute(); // Call to update the routing control with the new waypoints
-    });
+            // Display route on map
+            state.routeLayer = L.geoJSON(routeGeoJSON, {
+                style: { color: 'red', opacity: 0.6, weight: 4 }
+            }).addTo(state.map);
 
-    state.routingControl.on('routesfound', function(e) {
-        document.querySelector('.leaflet-routing-container').style.display = 'none';
-        document.getElementById('download-btn').style.display = 'inline-block';
-
-        if (e.routes && e.routes[0] && e.routes[0].coordinates) {
-            state.finalRouteCoordinates = e.routes[0].coordinates.map(coord => [coord.lat, coord.lng]);
-            state.currentDistance = e.routes[0].summary.totalDistance;
+            // Save route coordinates and update distance
+            state.finalRouteCoordinates = data.routes[0].geometry.coordinates;
+            state.currentDistance = data.routes[0].distance;
             updateInfoPanel();
-
         } else {
-            showError("No route found. Please adjust waypoints and try again.");
+            showError("No route found. Adjust waypoints and try again.");
         }
-    });
+    } catch (error) {
+        console.error("Failed to fetch route:", error);
+        showError("Route calculation failed. Please check your waypoints.");
+    }
+}
 
-    state.routingControl.on('routingerror', function(e) {
-        showError("Route calculation failed. Try adjusting the points.");
+// Function to handle dynamic updates when waypoints are dragged
+function setupDraggableWaypoints() {
+    state.routePoints.forEach((point, index) => {
+        const marker = L.marker([point[0], point[1]], { draggable: true })
+            .on('dragend', async function(e) {
+                // Update waypoint coordinates
+                const newLatLng = e.target.getLatLng();
+                state.routePoints[index] = [newLatLng.lat, newLatLng.lng];
+                await initializeRoutingControl(); // Recalculate the route
+            });
+        marker.addTo(state.map);
     });
 }
 
 
 function undoLastEdit() {
 }
-
-// Define a lock to prevent infinite recursion
-let isUpdatingRoute = false;
-
-function updateRoute() {
-    if (isUpdatingRoute) return;
-    isUpdatingRoute = true;
-
-    try {
-        if (!state.routingControl || state.routePoints.length < 2) return;
-
-        // Update the waypoints with the current route points
-        state.routingControl.setWaypoints(
-            state.routePoints.map(point => L.latLng(point[0], point[1]))
-        );
-    } finally {
-        isUpdatingRoute = false;
-    }
-}
-
 
 
 // reset views
