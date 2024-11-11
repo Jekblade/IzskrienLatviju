@@ -96,7 +96,6 @@ async function initializeMap() {
 // Event listeners setup
 function setupEventListeners() {
     state.map.on('draw:created', handleDrawCreated);
-    state.map.on('click', handleMapClick);
     
     // Button event listeners
     document.getElementById('search-btn').addEventListener('click', searchPlace);
@@ -132,16 +131,6 @@ function handleDrawCreated(event) {
     document.getElementById('reset-btn').style.display = 'inline-block';
 }
 
-function handleMapClick(e) {
-    if (state.routingControl && state.selectedArea) {
-        const latlng = e.latlng;
-        if (state.selectedArea.contains(latlng)) {
-            addMarker(latlng);
-        } else {
-            showError("Please click within the selected area");
-        }
-    }
-}
 
 function handleWindowResize() {
     const header = document.getElementById('header');
@@ -250,10 +239,9 @@ async function calculateOptimalRoute() {
     }
 }
 
-// State to track edited waypoints
-state.editedWaypointCount = 0;
 
 function initializeRoutingControl() {
+    // Remove existing routing control if it exists
     if (state.routingControl) {
         state.map.removeControl(state.routingControl);
     }
@@ -262,36 +250,34 @@ function initializeRoutingControl() {
 
     state.routingControl = L.Routing.control({
         waypoints: waypoints,
-        router: L.Routing.osrmv1({
-            serviceUrl: 'https://router.project-osrm.org/route/v1',
-            profile: 'foot'
+        router: L.Routing.mapbox('pk.eyJ1IjoiamVrYWJzamFuIiwiYSI6ImNtM2RrMTd4bjAzNDMycnF1Y2huYjI1dWQifQ.r5oltP7NHqf3W-lJlN0n9A', {
+            profile: 'mapbox/walking',  // Set the profile to pedestrian
         }),
+
         lineOptions: {
             styles: [{ color: 'red', opacity: 0.6, weight: 4 }]
         },
-        addWaypoints: true,
-        draggableWaypoints: true,
-        fitSelectedRoutes: true
+        addWaypoints: false,  // Prevent adding new waypoints
+        draggableWaypoints: true  // Make initial waypoints draggable
     }).addTo(state.map);
 
     // Track waypoint edits
     state.routingControl.on('waypointschanged', function(e) {
-        state.editedWaypointCount++;
-        
+        // Update only the position of dragged waypoints, avoiding duplication
         const updatedWaypoints = e.waypoints.map(wp => [wp.latLng.lat, wp.latLng.lng]);
-        state.routePoints = updatedWaypoints;
-        updateRoute();
+        state.routePoints = updatedWaypoints;  // Update route points to the new positions
+        updateRoute(); // Call to update the routing control with the new waypoints
     });
 
     state.routingControl.on('routesfound', function(e) {
         document.querySelector('.leaflet-routing-container').style.display = 'none';
         document.getElementById('download-btn').style.display = 'inline-block';
 
-        // Update final route coordinates safely if routes exist
         if (e.routes && e.routes[0] && e.routes[0].coordinates) {
             state.finalRouteCoordinates = e.routes[0].coordinates.map(coord => [coord.lat, coord.lng]);
             state.currentDistance = e.routes[0].summary.totalDistance;
             updateInfoPanel();
+
         } else {
             showError("No route found. Please adjust waypoints and try again.");
         }
@@ -302,39 +288,15 @@ function initializeRoutingControl() {
     });
 }
 
-function addMarker(latlng) {
-    const marker = L.marker(latlng, { draggable: true });
-    marker.addTo(state.map);
-    state.markers.push(marker); // Track markers if needed
-
-    marker.on('dragend', function(e) {
-        const newLatLng = e.target.getLatLng();
-        // Update routePoints or other state as needed, but avoid duplicating points here
-        updateRoute();
-    });
-}
 
 function undoLastEdit() {
-    if (state.editedWaypointCount > 0) {
-        state.routePoints = state.routePoints.slice(0, -1);
-        state.editedWaypointCount--;
-
-        updateRoute();
-
-        if (state.editedWaypointCount === 0) {
-            document.getElementById('undo-btn').style.display = 'none';
-        }
-    }
 }
 
 // Define a lock to prevent infinite recursion
 let isUpdatingRoute = false;
 
 function updateRoute() {
-    //avoid recursion
     if (isUpdatingRoute) return;
-
-    // Set lock to true to prevent re-entry
     isUpdatingRoute = true;
 
     try {
