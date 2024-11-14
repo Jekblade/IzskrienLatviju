@@ -9,7 +9,8 @@ const state = {
     customRouteLayer: null,
     grayBorderLine: null,
     routeHistory: [],
-    currentDistance: 0
+    currentDistance: 0,
+    finalRouteCoordinates: []
 };
 
 // Utility functions
@@ -222,13 +223,15 @@ async function calculateOptimalRoute() {
         showError("Please select an area on the map first");
         return;
     }
-
+    
     document.getElementById('loading').style.display = 'block';
+    
     try {
         resetRouteData();
         const resizedBorderPoints = resizeAndFitBorder(state.latviaBorderCoords, state.selectedArea);
-        state.routePoints = resizedBorderPoints.map(point => [point[0], point[1]]);
-        initializeRoutingControl();
+        state.routePoints = optimizeWaypoints(resizedBorderPoints.map(point => [point[0], point[1]]));
+        await initializeRoutingControl();
+        setupDraggableWaypoints();
     } catch (error) {
         console.error("Error calculating route:", error);
         showError("Failed to calculate route. Please try again.");
@@ -237,77 +240,189 @@ async function calculateOptimalRoute() {
     }
 }
 
-async function initializeRoutingControl() {
-    // Remove existing route layer if it exists
-    if (state.routeLayer) {
-        state.map.removeLayer(state.routeLayer);
-    }
+function optimizeWaypoints(points, tolerance = 0.001) {
+    return points.filter((point, index, array) => {
+        if (index === 0 || index === array.length - 1) return true;
+        
+        const prev = array[index - 1];
+        const distance = Math.sqrt(
+            Math.pow(point[0] - prev[0], 2) + 
+            Math.pow(point[1] - prev[1], 2)
+        );
+        
+        return distance > tolerance;
+    });
+}
 
-    const waypoints = state.routePoints.map(point => point.join(',')).join(';');
-    const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${waypoints}?geometries=geojson&access_token=pk.eyJ1IjoiamVrYWJzamFuIiwiYSI6ImNtM2RrMTd4bjAzNDMycnF1Y2huYjI1dWQifQ.r5oltP7NHqf3W-lJlN0n9A`;
-
-    try {
-        const response = await fetch(url);
-        const data = await response.json();
-
-        if (data.routes && data.routes.length > 0) {
-            const routeGeoJSON = {
-                type: 'Feature',
-                geometry: data.routes[0].geometry,
-                properties: {}
-            };
-
-            // Display route on map
-            state.routeLayer = L.geoJSON(routeGeoJSON, {
-                style: { color: 'red', opacity: 0.6, weight: 4 }
-            }).addTo(state.map);
-
-            // Save route coordinates and update distance
-            state.finalRouteCoordinates = data.routes[0].geometry.coordinates;
-            state.currentDistance = data.routes[0].distance;
-            updateInfoPanel();
-        } else {
-            showError("No route found. Adjust waypoints and try again.");
+async function makeDirectionsRequest(waypoints, retries = 3, delay = 1000) {
+    const accessToken = 'pk.eyJ1IjoiamVrYWJzamFuIiwiYSI6ImNtM2RrMTd4bjAzNDMycnF1Y2huYjI1dWQifQ.r5oltP7NHqf3W-lJlN0n9A';
+    
+    for (let i = 0; i < retries; i++) {
+        try {
+            const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${waypoints}?geometries=geojson&access_token=${accessToken}`;
+            const response = await fetch(url);
+            
+            if (response.status === 429) { // Rate limit exceeded
+                await new Promise(resolve => setTimeout(resolve, delay * (i + 1))); // Exponential backoff
+                continue;
+            }
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            if (!data.routes || data.routes.length === 0) {
+                throw new Error('No routes found');
+            }
+            
+            return data;
+        } catch (error) {
+            if (i === retries - 1) throw error;
+            await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
         }
+    }
+}
+
+async function initializeRoutingControl() {
+    try {
+        // Remove existing route layer and markers
+        clearExistingRoute();
+        
+        // Save current state for undo functionality
+        saveRouteState();
+        
+        // Split waypoints into chunks and process them
+        const chunkSize = 24;
+        const routeChunks = [];
+        let totalDistance = 0;
+        
+        for (let i = 0; i < state.routePoints.length; i += chunkSize) {
+            const chunk = state.routePoints.slice(i, Math.min(i + chunkSize, state.routePoints.length));
+            const waypoints = chunk.map(point => point.join(',')).join(';');
+            
+            const data = await makeDirectionsRequest(waypoints);
+            
+            if (data.routes && data.routes.length > 0) {
+                routeChunks.push(data.routes[0].geometry);
+                totalDistance += data.routes[0].distance;
+            }
+        }
+        
+        // Combine all route geometries
+        const combinedRoute = {
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: routeChunks.flatMap(chunk => chunk.coordinates)
+            },
+            properties: {}
+        };
+        
+        // Display route on map
+        state.routeLayer = L.geoJSON(combinedRoute, {
+            style: { color: 'red', opacity: 0.6, weight: 4 }
+        }).addTo(state.map);
+        
+        // Update state
+        state.finalRouteCoordinates = combinedRoute.geometry.coordinates;
+        state.currentDistance = totalDistance;
+        
+        // Update UI
+        updateInfoPanel();
+        
     } catch (error) {
         console.error("Failed to fetch route:", error);
         showError("Route calculation failed. Please check your waypoints.");
     }
 }
 
-// Function to handle dynamic updates when waypoints are dragged
 function setupDraggableWaypoints() {
+    // Clear existing markers
+    if (state.markers && Array.isArray(state.markers)) {
+        state.markers.forEach(marker => marker.remove());
+    }
+    state.markers = [];
+    
+    if (!state.routePoints || !Array.isArray(state.routePoints)) {
+        console.error("Invalid route points");
+        return;
+    }
+    
     state.routePoints.forEach((point, index) => {
-        const marker = L.marker([point[0], point[1]], { draggable: true })
-            .on('dragend', async function(e) {
-                // Update waypoint coordinates
-                const newLatLng = e.target.getLatLng();
-                state.routePoints[index] = [newLatLng.lat, newLatLng.lng];
-                await initializeRoutingControl(); // Recalculate the route
-            });
+        const marker = L.marker([point[0], point[1]], { 
+            draggable: true,
+            icon: L.divIcon({
+                className: 'custom-marker',
+                html: `<div class="marker-number">${index + 1}</div>`
+            })
+        }).on('dragstart', function() {
+            saveRouteState(); // Save state before dragging
+        }).on('dragend', async function(e) {
+            const newLatLng = e.target.getLatLng();
+            state.routePoints[index] = [newLatLng.lat, newLatLng.lng];
+            await initializeRoutingControl();
+        });
+        
+        state.markers.push(marker);
         marker.addTo(state.map);
     });
 }
 
+function saveRouteState() {
+    state.routeHistory.push({
+        routePoints: JSON.parse(JSON.stringify(state.routePoints)),
+        finalRouteCoordinates: JSON.parse(JSON.stringify(state.finalRouteCoordinates)),
+        currentDistance: state.currentDistance
+    });
+    
+    // Keep only last 10 states
+    if (state.routeHistory.length > 10) {
+        state.routeHistory.shift();
+    }
+}
 
 function undoLastEdit() {
+    if (state.routeHistory.length > 0) {
+        const previousState = state.routeHistory.pop();
+        state.routePoints = previousState.routePoints;
+        state.finalRouteCoordinates = previousState.finalRouteCoordinates;
+        state.currentDistance = previousState.currentDistance;
+        
+        clearExistingRoute();
+        
+        // Redraw route
+        state.routeLayer = L.geoJSON({
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: state.finalRouteCoordinates
+            }
+        }, {
+            style: { color: 'red', opacity: 0.6, weight: 4 }
+        }).addTo(state.map);
+        
+        // Redraw markers
+        setupDraggableWaypoints();
+        updateInfoPanel();
+    }
+}
+
+function clearExistingRoute() {
+    if (state.routeLayer) {
+        state.map.removeLayer(state.routeLayer);
+    }
+    state.markers.forEach(marker => marker.remove());
+    state.markers = [];
 }
 
 
-// reset views
 function resetRouteData() {
-    if (state.routingControl) {
-        state.map.removeControl(state.routingControl);
-        state.routingControl = null;
-    }
-
-    state.markers.forEach(marker => {
-        marker.off('dragend');
-        state.map.removeLayer(marker);
-    });
-    state.markers = [];
+    clearExistingRoute();
     state.routePoints = [];
+    state.finalRouteCoordinates = [];
     state.currentDistance = 0;
+    state.routeHistory = [];
     updateInfoPanel();
 }
 
@@ -401,6 +516,17 @@ function updateTutorialArrow() {
         const rect = drawControl.getBoundingClientRect();
         arrow.style.top = (rect.top + rect.height/2 - 20) + 'px';
         arrow.style.left = (rect.left + 35) + 'px';
+    }
+}
+
+function showError(message) {
+    const errorDiv = document.getElementById('error-message');
+    if (errorDiv) {
+        errorDiv.textContent = message;
+        errorDiv.style.display = 'block';
+        setTimeout(() => {
+            errorDiv.style.display = 'none';
+        }, 5000);
     }
 }
 
