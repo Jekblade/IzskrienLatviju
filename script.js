@@ -26,12 +26,6 @@ const debounce = (func, wait) => {
     };
 };
 
-const showError = (message, duration = 5000) => {
-    const errorDiv = document.getElementById('error-message');
-    errorDiv.textContent = message;
-    errorDiv.style.display = 'block';
-    setTimeout(() => { errorDiv.style.display = 'none'; }, duration);
-};
 
 const updateInfoPanel = () => {
     const panel = document.getElementById('info-panel');
